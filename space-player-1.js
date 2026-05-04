@@ -1,6 +1,6 @@
 /**
- * SpacePlayer.js - Enhanced Video UX Library
- * 모든 기존 기능(야간 모드, 스냅샷 미리보기, 설정 패널, 우클릭 메뉴 등) 포함
+ * SpacePlayer.js - Enhanced Video UX Library with Ads Support
+ * 기능: 야간 모드, 스냅샷 미리보기, 설정 패널, 우클릭 메뉴, 프리롤/미드롤 광고
  */
 
 class SpacePlayer {
@@ -11,9 +11,14 @@ class SpacePlayer {
         this.options = {
             src: options.src || '',
             poster: options.poster || '',
+            ads: options.ads || [], // [{time: 0, src: '', link: '', skipTime: 5}]
             ...options
         };
 
+        this.isAdPlaying = false;
+        this.currentAd = null;
+        this.adsQueue = [...this.options.ads].sort((a, b) => a.time - b.time);
+        
         this.init();
     }
 
@@ -25,76 +30,88 @@ class SpacePlayer {
     }
 
     render() {
-        // 스타일 주입
         const style = document.createElement('style');
         style.textContent = `
             .space-player-container { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; overflow: hidden; border-radius: 8px; box-shadow: 0 30px 60px rgba(0, 0, 0, 0.8); cursor: pointer; user-select: none; font-family: "Pretendard Variable", sans-serif; color: #fff; }
             .night-mode-filter { position: absolute; inset: 0; background: rgba(255, 150, 0, 0.15); mix-blend-mode: multiply; pointer-events: none; z-index: 2; display: none; }
             .night-mode-active .night-mode-filter { display: block; }
             .space-video { width: 100%; height: 100%; object-fit: contain; display: block; }
-            .space-controls-overlay { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.4) 40%, transparent); padding: 0 20px 15px; opacity: 0; transform: translateY(10px); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 10; pointer-events: none; }
+            
+            /* 광고 레이어 */
+            .ad-layer { position: absolute; inset: 0; z-index: 50; display: none; background: #000; }
+            .ad-layer.active { display: block; }
+            .ad-video { width: 100%; height: 100%; object-fit: contain; }
+            .ad-info { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.6); padding: 5px 12px; border-radius: 4px; font-size: 12px; border: 1px solid rgba(255,255,255,0.2); }
+            .ad-skip-btn { position: absolute; bottom: 80px; right: 0; background: rgba(0,0,0,0.8); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 12px 24px; cursor: not-allowed; opacity: 0.6; transition: 0.3s; pointer-events: none; }
+            .ad-skip-btn.available { cursor: pointer; opacity: 1; pointer-events: auto; background: #fff; color: #000; }
+            .ad-link-overlay { position: absolute; inset: 0; z-index: 51; cursor: pointer; }
+
+            .space-controls-overlay { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.4) 40%, transparent); padding: 0 20px 15px; opacity: 0; transform: translateY(10px); transition: all 0.3s ease; z-index: 10; pointer-events: none; }
             .space-player-container:hover .space-controls-overlay, .space-player-container.paused .space-controls-overlay { opacity: 1; transform: translateY(0); pointer-events: auto; }
+            .is-ad-playing .space-controls-overlay { display: none !important; }
+
             .space-progress-area { position: relative; height: 4px; width: 100%; background: rgba(255,255,255,0.2); margin-bottom: 12px; cursor: pointer; transition: height 0.2s; display: flex; align-items: center; }
             .space-progress-area:hover { height: 10px; }
             .space-progress-bar { position: absolute; height: 100%; background: #ff0000; width: 0%; pointer-events: none; }
-            .space-progress-bar::after { content: ''; position: absolute; right: -7px; top: 50%; transform: translateY(-50%) scale(0); width: 14px; height: 14px; background: #ff0000; border-radius: 50%; transition: transform 0.15s; }
-            .space-progress-area:hover .space-progress-bar::after { transform: translateY(-50%) scale(1); }
             .progress-preview { position: absolute; bottom: 25px; left: 0; transform: translateX(-50%); width: 160px; aspect-ratio: 16 / 9; background: #000; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 4px; display: none; pointer-events: none; overflow: hidden; z-index: 20; }
             .progress-preview canvas { width: 100%; height: 100%; object-fit: cover; }
             .progress-preview-time { position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 2px; font-size: 10px; color: #fff; }
-            .space-controls-main, .space-left-controls, .space-right-controls { display: flex; align-items: center; }
-            .space-controls-main { justify-content: space-between; }
-            .space-left-controls, .space-right-controls { gap: 12px; }
+            
+            .space-controls-main { display: flex; justify-content: space-between; align-items: center; }
+            .space-left-controls, .space-right-controls { display: flex; align-items: center; gap: 12px; }
             .control-btn { background: none; border: none; cursor: pointer; display: flex; align-items: center; padding: 8px; border-radius: 50%; transition: 0.2s; }
             .control-btn:hover { background: rgba(255,255,255,0.1); transform: scale(1.1); }
             .control-btn svg { width: 26px; height: 26px; fill: #fff; }
-            .space-time { font-size: 13px; margin-left: 8px; font-variant-numeric: tabular-nums; color: #ccc; }
+            .space-time { font-size: 13px; margin-left: 8px; color: #ccc; }
+            
             .volume-container { display: flex; align-items: center; width: 42px; overflow: hidden; transition: 0.3s; }
             .volume-container:hover { width: 130px; }
-            .volume-slider { width: 70px; margin-left: 10px; height: 3px; -webkit-appearance: none; background: rgba(255,255,255,0.2); border-radius: 4px; outline: none; opacity: 0; transition: 0.2s; cursor: pointer; }
+            .volume-slider { width: 70px; margin-left: 10px; height: 3px; -webkit-appearance: none; background: rgba(255,255,255,0.2); outline: none; opacity: 0; transition: 0.2s; }
             .volume-container:hover .volume-slider { opacity: 1; }
-            .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: #fff; border-radius: 50%; }
-            .space-state-indicator { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80px; height: 80px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); border-radius: 50%; display: flex; justify-content: center; align-items: center; opacity: 0; pointer-events: none; z-index: 5; backdrop-filter: blur(5px); }
+
+            .space-state-indicator { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80px; height: 80px; background: rgba(0,0,0,0.6); border-radius: 50%; display: flex; justify-content: center; align-items: center; opacity: 0; pointer-events: none; z-index: 5; }
             .space-state-indicator.animate { animation: feedback-pop 0.5s ease-out; }
-            @keyframes feedback-pop { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); } 50% { opacity: 1; transform: translate(-50%, -50%) scale(1.1); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.3); } }
-            .settings-panel, .context-menu { position: absolute; background: rgba(10, 10, 10, 0.9); backdrop-filter: blur(20px) saturate(180%); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); z-index: 100; overflow: hidden; }
-            .settings-panel { bottom: 75px; right: 20px; width: 280px; display: none; transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
-            .context-menu { width: 180px; display: none; padding: 4px; transform-origin: top left; }
-            .setting-item, .context-item { padding: 10px 14px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: 0.1s; border-radius: 4px; color: #ddd; margin-bottom: 2px; }
+            @keyframes feedback-pop { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); } 50% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.3); } }
+
+            .settings-panel, .context-menu { position: absolute; background: rgba(10, 10, 10, 0.9); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; z-index: 100; display: none; }
+            .settings-panel { bottom: 75px; right: 20px; width: 280px; overflow: hidden; }
+            .context-menu { width: 180px; padding: 4px; }
+            .setting-item, .context-item { padding: 10px 14px; font-size: 13px; cursor: pointer; color: #ddd; display: flex; justify-content: space-between; align-items: center; }
             .setting-item:hover, .context-item:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
-            .context-item.active { color: #ff0000; font-weight: 600; }
-            .context-item.sep { border-top: 1px solid rgba(255,255,255,0.08); margin-top: 4px; padding-top: 10px; pointer-events: none; color: #555; font-size: 10px; justify-content: center; letter-spacing: 2px; font-weight: 700; }
-            .settings-wrapper { display: flex; width: 200%; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+            .context-item.active { color: #ff0000; }
+            .sep { border-top: 1px solid rgba(255,255,255,0.1); margin-top: 5px; padding-top: 5px; font-size: 10px; text-align: center; color: #555; }
+            
+            .settings-wrapper { display: flex; width: 200%; transition: transform 0.3s; }
             .settings-wrapper.slide-active { transform: translateX(-50%); }
-            .settings-column { width: 50%; display: flex; flex-direction: column; padding: 6px; }
-            .settings-header { padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; font-weight: 600; color: #fff; }
-            .settings-header:hover { background: rgba(255,255,255,0.05); }
-            .settings-header svg { width: 18px; height: 18px; fill: #fff; }
-            .val { color: #888; font-size: 12px; display: flex; align-items: center; gap: 6px; }
-            .val svg { width: 12px; height: 12px; fill: #666; }
-            .submenu-container { display: none; width: 100%; }
-            .submenu-container.active { display: block; }
+            .settings-column { width: 50%; padding: 6px; }
             .hide { display: none !important; }
         `;
         document.head.appendChild(style);
 
-        // UI 구조 생성
         const arrowSvg = `<svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>`;
         const backSvg = `<svg viewBox="0 0 24 24"><path d="M15.41 7.41L10.83 12l4.58 4.59L14 18l-6-6 6-6 1.41 1.41z"/></svg>`;
 
         this.container.classList.add('space-player-container', 'paused');
         this.container.innerHTML = `
             <div class="night-mode-filter"></div>
+            
+            <!-- 메인 비디오 -->
             <video class="space-video" src="${this.options.src}" poster="${this.options.poster}" playsinline crossorigin="anonymous"></video>
+            
+            <!-- 광고 레이어 -->
+            <div class="ad-layer">
+                <div class="ad-link-overlay"></div>
+                <video class="ad-video" crossorigin="anonymous"></video>
+                <div class="ad-info">광고 상영 중</div>
+                <button class="ad-skip-btn">광고 건너뛰기</button>
+            </div>
+
             <div class="space-state-indicator"><svg viewBox="0 0 24 24" class="indicator-icon" fill="white" width="40" height="40"></svg></div>
             
             <div class="space-controls-overlay">
                 <div class="space-progress-area">
                     <div class="space-progress-bar"></div>
-                    <div class="progress-preview">
-                        <canvas></canvas>
-                        <div class="progress-preview-time">0:00</div>
-                    </div>
+                    <div class="progress-preview"><canvas></canvas><div class="progress-preview-time">0:00</div></div>
                 </div>
                 <div class="space-controls-main">
                     <div class="space-left-controls">
@@ -103,9 +120,7 @@ class SpacePlayer {
                             <svg viewBox="0 0 24 24" class="pause-icon hide"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                         </button>
                         <div class="volume-container">
-                            <button class="control-btn mute-btn">
-                                <svg viewBox="0 0 24 24" class="vol-icon"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
-                            </button>
+                            <button class="control-btn mute-btn"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg></button>
                             <input type="range" class="volume-slider" min="0" max="1" step="0.05" value="1">
                         </div>
                         <div class="space-time"><span class="current-time">0:00</span> / <span class="duration-time">0:00</span></div>
@@ -128,24 +143,15 @@ class SpacePlayer {
                 <div class="settings-wrapper">
                     <div class="settings-column main-menu-column">
                         <div class="setting-item" data-sub="speedSub"><span>재생 속도</span><span class="val cur-speed">보통 ${arrowSvg}</span></div>
-                        <div class="setting-item" data-sub="qualSub"><span>화질</span><span class="val cur-qual">1080p ${arrowSvg}</span></div>
                         <div class="setting-item loop-toggle"><span>루프 재생</span><span class="val loop-label">끔 ${arrowSvg}</span></div>
                     </div>
                     <div class="settings-column">
                         <div class="submenu-container speed-sub">
-                            <div class="settings-header back-btn">${backSvg} 재생 속도</div>
+                            <div class="settings-header back-btn" style="padding:10px; cursor:pointer;">${backSvg} 재생 속도</div>
                             <div class="setting-item opt-s" data-v="0.5">0.5x</div>
-                            <div class="setting-item opt-s" data-v="0.75">0.75x</div>
                             <div class="setting-item opt-s" data-v="1">보통 (1x)</div>
                             <div class="setting-item opt-s" data-v="1.5">1.5x</div>
                             <div class="setting-item opt-s" data-v="2">2x</div>
-                        </div>
-                        <div class="submenu-container qual-sub">
-                            <div class="settings-header back-btn">${backSvg} 화질</div>
-                            <div class="setting-item opt-q" data-v="1080p">1080p (HD)</div>
-                            <div class="setting-item opt-q" data-v="720p">720p</div>
-                            <div class="setting-item opt-q" data-v="480p">480p</div>
-                            <div class="setting-item opt-q" data-v="자동">자동</div>
                         </div>
                     </div>
                 </div>
@@ -168,23 +174,25 @@ class SpacePlayer {
         this.settingsPanel = c.querySelector('.settings-panel');
         this.settingsWrapper = c.querySelector('.settings-wrapper');
         this.contextMenu = c.querySelector('.context-menu');
-        this.isDragging = false;
-        this.panelH = 0;
+        
+        // 광고 관련
+        this.adLayer = c.querySelector('.ad-layer');
+        this.adVideo = c.querySelector('.ad-video');
+        this.adSkipBtn = c.querySelector('.ad-skip-btn');
+        this.adLinkOverlay = c.querySelector('.ad-link-overlay');
+        this.adInfo = c.querySelector('.ad-info');
     }
 
     bindEvents() {
         const c = this.container;
-        
-        // 재생/일시정지
+
+        // 재생 토글
         c.querySelector('.play-pause-btn').onclick = e => { e.stopPropagation(); this.togglePlay(); };
-        c.onclick = e => { if (!e.target.closest('.space-controls-overlay, .settings-panel, .context-menu')) this.togglePlay(); };
+        this.video.onclick = () => this.togglePlay();
 
         // 볼륨
         const vSlider = c.querySelector('.volume-slider');
-        vSlider.oninput = e => {
-            this.video.volume = e.target.value;
-            this.video.muted = (this.video.volume === 0);
-        };
+        vSlider.oninput = e => { this.video.volume = e.target.value; };
 
         // 전체화면
         c.querySelector('.full-screen-btn').onclick = () => {
@@ -192,114 +200,62 @@ class SpacePlayer {
             else document.exitFullscreen();
         };
 
-        // 탐색 바
-        this.progressArea.onmousedown = e => { this.isDragging = true; this.seek(e); this.updatePreview(e); };
+        // 탐색
+        this.progressArea.onmousedown = e => { this.isDragging = true; this.seek(e); };
         window.addEventListener('mousemove', e => { if (this.isDragging) this.seek(e); });
-        window.addEventListener('mouseup', () => { if (this.isDragging) this.isDragging = false; });
+        window.addEventListener('mouseup', () => { this.isDragging = false; });
         this.progressArea.onmousemove = e => this.updatePreview(e);
-        this.progressArea.onmouseleave = () => { if (!this.isDragging) this.preview.style.display = 'none'; };
+        this.progressArea.onmouseleave = () => { this.preview.style.display = 'none'; };
 
-        // 설정 패널 토글
+        // 설정 창
         c.querySelector('.setting-btn').onclick = e => {
             e.stopPropagation();
-            const show = getComputedStyle(this.settingsPanel).display === 'none';
-            this.settingsPanel.style.display = show ? 'block' : 'none';
-            this.contextMenu.style.display = 'none';
-            if (show) {
-                if (!this.panelH) this.panelH = c.querySelector('.main-menu-column').offsetHeight;
-                this.settingsPanel.style.height = `${this.panelH}px`;
-                this.settingsWrapper.classList.remove('slide-active');
-            }
+            this.settingsPanel.style.display = this.settingsPanel.style.display === 'block' ? 'none' : 'block';
         };
 
-        // 서브메뉴 이동
-        c.querySelectorAll('.setting-item[data-sub]').forEach(item => {
-            item.onclick = e => {
-                e.stopPropagation();
-                c.querySelectorAll('.submenu-container').forEach(sc => sc.classList.remove('active'));
-                const target = item.dataset.sub === 'speedSub' ? '.speed-sub' : '.qual-sub';
-                const sub = c.querySelector(target);
-                sub.classList.add('active');
-                this.settingsWrapper.classList.add('slide-active');
-                this.settingsPanel.style.height = `${sub.scrollHeight + 12}px`;
-            };
-        });
-
-        c.querySelectorAll('.back-btn').forEach(btn => btn.onclick = e => {
-            e.stopPropagation();
-            this.settingsWrapper.classList.remove('slide-active');
-            this.settingsPanel.style.height = `${this.panelH}px`;
-        });
-
-        // 재생 속도 변경
-        c.querySelectorAll('.opt-s').forEach(opt => opt.onclick = e => {
+        // 재생 속도
+        c.querySelectorAll('.opt-s').forEach(opt => opt.onclick = () => {
             const v = parseFloat(opt.dataset.v);
             this.video.playbackRate = v;
-            c.querySelector('.cur-speed').innerHTML = (v === 1 ? '보통' : v + 'x') + this.getArrow();
-            c.querySelector('.back-btn').click();
+            c.querySelector('.cur-speed').textContent = v === 1 ? '보통' : v + 'x';
+            this.settingsPanel.style.display = 'none';
         });
-
-        // 루프 토글
-        const loopAction = () => {
-            this.video.loop = !this.video.loop;
-            c.querySelector('.loop-label').innerHTML = (this.video.loop ? '켬' : '끔') + this.getArrow();
-            c.querySelector('.ctx-loop').classList.toggle('active', this.video.loop);
-        };
-        c.querySelector('.loop-toggle').onclick = e => { e.stopPropagation(); loopAction(); };
 
         // 우클릭 메뉴
         c.oncontextmenu = e => {
             e.preventDefault();
-            const rect = c.getBoundingClientRect();
-            let x = e.clientX - rect.left;
-            let y = e.clientY - rect.top;
-            if (x + 180 > rect.width) x -= 180;
-            if (y + 160 > rect.height) y -= 160;
-            this.contextMenu.style.left = `${x}px`;
-            this.contextMenu.style.top = `${y}px`;
+            this.contextMenu.style.left = `${e.offsetX}px`;
+            this.contextMenu.style.top = `${e.offsetY}px`;
             this.contextMenu.style.display = 'block';
-            this.settingsPanel.style.display = 'none';
         };
 
-        c.querySelector('.ctx-screenshot').onclick = e => {
+        c.querySelector('.ctx-screenshot').onclick = () => this.takeScreenshot();
+
+        // 광고 관련 이벤트
+        this.adSkipBtn.onclick = (e) => {
             e.stopPropagation();
-            const canvas = document.createElement('canvas');
-            canvas.width = this.video.videoWidth; canvas.height = this.video.videoHeight;
-            canvas.getContext('2d').drawImage(this.video, 0, 0);
-            const link = document.createElement('a');
-            link.download = `Shot_${Date.now()}.png`; link.href = canvas.toDataURL(); link.click();
-            this.contextMenu.style.display = 'none';
+            if (this.adSkipBtn.classList.contains('available')) this.finishAd();
         };
 
-        c.querySelector('.ctx-night').onclick = e => {
-            e.stopPropagation();
-            c.classList.toggle('night-mode-active');
-            c.querySelector('.ctx-night').classList.toggle('active', c.classList.contains('night-mode-active'));
-            this.contextMenu.style.display = 'none';
+        this.adLinkOverlay.onclick = () => {
+            if (this.currentAd?.link) window.open(this.currentAd.link, '_blank');
         };
 
-        c.querySelector('.ctx-loop').onclick = e => { e.stopPropagation(); loopAction(); this.contextMenu.style.display = 'none'; };
+        this.adVideo.onended = () => this.finishAd();
 
-        // 기타 문서 클릭 시 메뉴 닫기
         document.addEventListener('click', () => {
-            this.settingsPanel.style.display = 'none';
             this.contextMenu.style.display = 'none';
-        });
-
-        document.addEventListener('keydown', e => {
-            if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
-                e.preventDefault();
-                this.togglePlay();
-            }
         });
     }
 
     initVideo() {
         this.video.ontimeupdate = () => {
-            if (!this.video.duration || this.isDragging) return;
-            const ratio = (this.video.currentTime / this.video.duration) * 100;
-            this.progressBar.style.width = `${ratio}%`;
-            this.container.querySelector('.current-time').textContent = this.formatTime(this.video.currentTime);
+            this.checkAds();
+            if (this.video.duration) {
+                const ratio = (this.video.currentTime / this.video.duration) * 100;
+                this.progressBar.style.width = `${ratio}%`;
+                this.container.querySelector('.current-time').textContent = this.formatTime(this.video.currentTime);
+            }
         };
 
         this.video.onloadedmetadata = () => {
@@ -309,13 +265,69 @@ class SpacePlayer {
 
         this.hiddenVideo.onseeked = () => {
             const ctx = this.previewCanvas.getContext('2d');
-            this.previewCanvas.width = 160;
-            this.previewCanvas.height = 90;
+            this.previewCanvas.width = 160; this.previewCanvas.height = 90;
             ctx.drawImage(this.hiddenVideo, 0, 0, 160, 90);
         };
     }
 
+    /**
+     * 광고 로직
+     */
+    checkAds() {
+        if (this.isAdPlaying) return;
+        
+        const currentTime = Math.floor(this.video.currentTime);
+        const adIndex = this.adsQueue.findIndex(ad => ad.time <= currentTime);
+
+        if (adIndex !== -1) {
+            this.currentAd = this.adsQueue.splice(adIndex, 1)[0];
+            this.playAd(this.currentAd);
+        }
+    }
+
+    playAd(ad) {
+        this.isAdPlaying = true;
+        this.video.pause();
+        this.container.classList.add('is-ad-playing');
+        this.adLayer.classList.add('active');
+        
+        this.adVideo.src = ad.src;
+        this.adVideo.play();
+
+        // 스킵 버튼 카운트다운
+        let timeLeft = ad.skipTime || 5;
+        this.adSkipBtn.classList.remove('available');
+        this.adSkipBtn.textContent = `광고 건너뛰기 (${timeLeft})`;
+
+        const timer = setInterval(() => {
+            timeLeft--;
+            if (timeLeft <= 0) {
+                clearInterval(timer);
+                this.adSkipBtn.classList.add('available');
+                this.adSkipBtn.textContent = `광고 건너뛰기 ➔`;
+            } else {
+                this.adSkipBtn.textContent = `광고 건너뛰기 (${timeLeft})`;
+            }
+        }, 1000);
+        
+        this.adTimer = timer;
+    }
+
+    finishAd() {
+        clearInterval(this.adTimer);
+        this.isAdPlaying = false;
+        this.adVideo.pause();
+        this.adLayer.classList.remove('active');
+        this.container.classList.remove('is-ad-playing');
+        this.video.play();
+        this.container.classList.remove('paused');
+    }
+
+    /**
+     * 유틸리티
+     */
     togglePlay() {
+        if (this.isAdPlaying) return;
         const isPaused = this.video.paused;
         isPaused ? this.video.play() : this.video.pause();
         this.container.classList.toggle('paused', !isPaused);
@@ -332,32 +344,33 @@ class SpacePlayer {
     }
 
     seek(e) {
+        if (this.isAdPlaying) return;
         const rect = this.progressArea.getBoundingClientRect();
-        let x = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
-        x = Math.max(0, Math.min(x, rect.width));
-        const ratio = x / rect.width;
+        const ratio = Math.max(0, Math.min((e.clientX - rect.left) / rect.width, 1));
         this.video.currentTime = ratio * this.video.duration;
-        this.progressBar.style.width = `${ratio * 100}%`;
     }
 
     updatePreview(e) {
         const rect = this.progressArea.getBoundingClientRect();
-        let x = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
-        x = Math.max(0, Math.min(x, rect.width));
-        const ratio = x / rect.width;
-        const targetTime = this.video.duration * ratio;
-        this.preview.style.left = `${x}px`;
+        const ratio = (e.clientX - rect.left) / rect.width;
+        this.preview.style.left = `${e.clientX - rect.left}px`;
         this.preview.style.display = 'block';
-        this.previewTime.textContent = this.formatTime(targetTime);
-        this.hiddenVideo.currentTime = targetTime;
+        this.previewTime.textContent = this.formatTime(this.video.duration * ratio);
+        this.hiddenVideo.currentTime = this.video.duration * ratio;
+    }
+
+    takeScreenshot() {
+        const canvas = document.createElement('canvas');
+        canvas.width = this.video.videoWidth; canvas.height = this.video.videoHeight;
+        canvas.getContext('2d').drawImage(this.video, 0, 0);
+        const link = document.createElement('a');
+        link.download = `SpaceShot_${Date.now()}.png`;
+        link.href = canvas.toDataURL();
+        link.click();
     }
 
     formatTime(t) {
         const m = Math.floor(t / 60), s = Math.floor(t % 60);
         return `${m}:${s < 10 ? '0' + s : s}`;
-    }
-
-    getArrow() {
-        return ` <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:#666;"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>`;
     }
 }
